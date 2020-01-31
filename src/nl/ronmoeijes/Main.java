@@ -101,7 +101,20 @@ public class Main {
 //        createDateFolders(sourceDir,subRoot);
     }
 
-    private static String extractDateTime(Path path, String suffix) throws IOException {
+    private static Path createDateTimePath(String str, String suffix) {
+        return Paths.get(str.substring(0,10)
+                     .concat(suffix)
+                     .replaceAll(":","")
+                     .replaceAll(" ","_"));
+    }
+
+    private static Path createDateTimePath(String str) {
+        return Paths.get(str.substring(11)
+                            .replaceAll(":","")
+                            .replaceAll(" ","_"));
+    }
+
+    private static String extractDateTime(Path path) throws IOException {
         File file = path.toFile();
         // There are multiple ways to get a Metadata object for a file
 
@@ -125,11 +138,7 @@ public class Main {
                 //
                 for (Tag tag : directory.getTags()) {
                     if (tag.getTagName().equals("Date/Time Original")) {
-                        return Paths.get(tag.getDescription()
-                                .substring(0,10)
-                                .concat(suffix)
-                                .replaceAll(":","")
-                                .replaceAll(" ","_"));
+                        return tag.getDescription();
                     }
                 }
             }
@@ -140,13 +149,7 @@ public class Main {
         }
         BasicFileAttributes attr = Files.readAttributes(path, BasicFileAttributes.class);
 
-        return Paths.get(attr
-                .lastModifiedTime()
-                .toString()
-                .substring(0, 10)
-                .concat(suffix)
-                .replaceAll("-", "")
-                .replaceAll(" ","_"));
+        return attr.lastModifiedTime().toString();
     }
 
     // Move file
@@ -189,11 +192,15 @@ public class Main {
                     .filter(Files::isRegularFile)
                     .forEach(sourcePath -> {
                         try {
-                            Path datePath = extractDateTime(sourcePath, suffix);
+                            String dateTime = extractDateTime(sourcePath);
+                            Path datePath = createDateTimePath(dateTime, suffix);
+                            Path prefix = createDateTimePath(dateTime);
                             Path targetPath = target.resolve(datePath);
                             createDirectory(targetPath);
-                            Path filePath = targetPath.resolve(sourcePath.getFileName());
-//                            System.out.println("TARGET: " + targetPath);
+                            Path filePath = targetPath.resolve(prefix + "_" + sourcePath.getFileName());
+//                              System.out.println(datePath);
+//                              System.out.println(prefix);
+//                            System.out.println("TARGET: " + filePath);
 //                            System.out.println("SOURCE: " + sourcePath);
                             moveFiles(sourcePath, filePath);
                         } catch (IOException e) {
@@ -219,4 +226,12 @@ public class Main {
 //        .substring(0,10)
 //        .concat(suffix)
 //        .replaceAll(":","")
+//        .replaceAll(" ","_"));
+
+//return Paths.get(attr
+//        .lastModifiedTime()
+//        .toString()
+//        .substring(0, 10)
+//        .concat(suffix)
+//        .replaceAll("-", "")
 //        .replaceAll(" ","_"));
