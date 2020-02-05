@@ -14,15 +14,34 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.time.LocalDateTime;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.stream.Stream;
+
+import static java.time.format.DateTimeFormatter.*;
+import static java.util.Objects.nonNull;
+import static java.util.regex.Pattern.matches;
+import static org.apache.commons.lang3.StringUtils.EMPTY;
 
 public class Main {
 
     private static final Path PICTURE_ROOT = Paths.get("D:\\Afbeeldingen\\Foto's");
-    private static final String DATE_PLACEHOLDER = "jjjjmmdd";
-    private static Path SOURCE_DIR;
-    private static Path TARGET_DIR;
-    private static String SUFFIX = "";
+    private static final String DATE_TIME_REGEX = "\\d{4}:\\d{2}:\\d{2} \\d{2}:\\d{2}:\\d{2}";
+    private static final String SUFFIX_REGEX = "\\d{2,4}\\W\\d{2}\\W\\d{2,4} ";
+    private static final DateTimeFormatter YEAR_PATTERN = DateTimeFormatter.ofPattern("yyyy");
+    private static final DateTimeFormatter DATE_PATTERN = DateTimeFormatter.ofPattern("yyyyMMdd");
+    private static final DateTimeFormatter TIME_PATTERN = DateTimeFormatter.ofPattern("HHmmss");
+    private static final DateTimeFormatter META_DATA_FORMATTER = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss");
+    private static List<String> years = new ArrayList<>();
+    private static List<String> dates = new ArrayList<>();
+    private static List<String> times = new ArrayList<>();
+    private static Path source;
+    private static Path target;
+    private static boolean addPrefix;
+    private static String suffix = EMPTY;
 
     public static void main(String[] args) throws IOException {
         // write your code here
@@ -30,30 +49,30 @@ public class Main {
         // create the command line parser
         CommandLineParser parser = new DefaultParser();
 
-// create the Options
+        // create the Options
         Options options = new Options();
-        options.addOption( "c", "camera", false, "create directorys in camera directory" );
-        Option suffix = Option.builder("x")
+        options.addOption( "p", "prefix", false, "add a prefix for each file" );
+        Option suffixOption = Option.builder("x")
                 .longOpt( "suffix" )
                 .desc( "specify a suffix for the new directory [Default = name of previous parent directory]" )
                 .optionalArg(true)
                 .argName( "SUFFIX" )
                 .build();
-        options.addOption( suffix );
-        Option source = Option.builder("s")
+        options.addOption( suffixOption );
+        Option sourceOption = Option.builder("s")
                 .longOpt( "source" )
                 .desc( "specify a source path"  )
                 .hasArg()
                 .argName( "SOURCE" )
                 .build();
-        options.addOption( source );
-        Option target = Option.builder("t")
+        options.addOption( sourceOption );
+        Option targetOption = Option.builder("t")
                 .longOpt( "target" )
                 .desc( "specify a target path"  )
                 .hasArg()
                 .argName( "TARGET" )
                 .build();
-        options.addOption( target );
+        options.addOption( targetOption );
 
         try {
             // parse the command line arguments
@@ -61,60 +80,48 @@ public class Main {
 
             // validate that TARGET_DIR has been set
             if( line.hasOption( "target" ) ) {
-                TARGET_DIR = Paths.get(line.getOptionValue("target"));
-            } else if( line.hasOption( "camera" ) ) {
-                TARGET_DIR = PICTURE_ROOT.resolve("Fotocamera");
+                target = Paths.get(line.getOptionValue("target"));
             } else {
-                TARGET_DIR = PICTURE_ROOT.resolve("Mobile");
+                target = PICTURE_ROOT;
             }
-            SOURCE_DIR = Paths.get(line.getOptionValue("source"));
+            source = Paths.get(line.getOptionValue("source"));
+            if( line.hasOption( "prefix" ) ) {
+                addPrefix = true;
+            }
             if( line.hasOption( "suffix" ) ) {
-                SUFFIX = "_" + line.getOptionValue("suffix");
-                if (SUFFIX.equals("_null")) {
-                    SUFFIX = "_" + SOURCE_DIR.getFileName();
-                    SUFFIX = SUFFIX.replaceAll("\\d{4}-\\d{2}-\\d{2} ", "");
+                suffix = "_" + line.getOptionValue("suffix");
+                if (suffix.equals("_null")) {
+                    suffix = "_" + source.getFileName();
+                    suffix = suffix.replaceAll(SUFFIX_REGEX, EMPTY);
                 }
             }
         }
         catch(ParseException exp ) {
             System.out.println( "Unexpected exception:" + exp.getMessage() );
         }
-        System.out.println("SOURCE: " + SOURCE_DIR);
+        System.out.println("SOURCE: " + source);
 //        System.out.println("TARGET: " + TARGET_DIR + "\\" + DATE_PLACEHOLDER);
-        createDateDirectories(SOURCE_DIR,TARGET_DIR, SUFFIX);
-
-//        boolean useCameraRoot = false;
-//        Path subRoot;
-//        Path mobileRoot;
-//        for (String arg : args) {
-//            if (arg.equals("-c")) {
-//                useCameraRoot = true;
-//                break;
-//            }
-//        }
-//        if (useCameraRoot) {
-//            subRoot = pictureRoot.resolve("Fotocamera");
-//        } else {
-//            subRoot = pictureRoot.resolve("Mobiel");
-//        }
-//        System.out.println(subRoot);
-//        createDateFolders(sourceDir,subRoot);
+        analyseDates(source);
     }
 
-    private static Path createDateTimePath(String str, String suffix) {
-        return Paths.get(str.substring(0,10)
-                     .concat(suffix)
-                     .replaceAll(":","")
-                     .replaceAll(" ","_"));
+    private static boolean analyseDates(Path source) throws IOException {
+        try (Stream<Path> paths = Files.walk(source)) {
+            paths
+                    .filter(Files::isRegularFile)
+                    .forEach(path -> {
+                        LocalDateTime dateTime = fetchDateTime(path);
+                        addDateTimeToList(dateTime,YEAR_PATTERN,years);
+                        addDateTimeToList(dateTime,DATE_PATTERN,dates);
+                        addDateTimeToList(dateTime,TIME_PATTERN,times);
+                    });
+        }
+        System.out.println(years);
+        System.out.println(dates);
+        System.out.println(times);
+        return !(dates.size() == 1) && years.size() == 1;
     }
 
-    private static Path createDateTimePath(String str) {
-        return Paths.get(str.substring(11)
-                            .replaceAll(":","")
-                            .replaceAll(" ","_"));
-    }
-
-    private static String extractDateTime(Path path) throws IOException {
+    private static LocalDateTime fetchDateTime(Path path) {
         File file = path.toFile();
         // There are multiple ways to get a Metadata object for a file
 
@@ -138,18 +145,35 @@ public class Main {
                 //
                 for (Tag tag : directory.getTags()) {
                     if (tag.getTagName().equals("Date/Time Original")) {
-                        return tag.getDescription();
+
+                        return LocalDateTime.parse(tag.getDescription(), META_DATA_FORMATTER);
                     }
                 }
             }
-            System.out.println("FAILED: Could not find original date for " + path.getFileName() +
-                    " falling back to last modified time...");
-        } catch (ImageProcessingException | IOException e) {
-            System.err.println("ERROR: " + e);
+            System.out.print("FAILED: Could not find original date for " + file.getName() +
+                    " falling back to last modified time: ");
+            String lastModifiedTime = Files
+                    .readAttributes(path, BasicFileAttributes.class)
+                    .lastModifiedTime()
+                    .toString();
+            System.out.println(lastModifiedTime);
+            return ZonedDateTime.parse(lastModifiedTime, ISO_DATE_TIME).toLocalDateTime();
+        } catch (ImageProcessingException e) {
+            System.err.println("ERROR: " + e + " for " + file.getName());
+        } catch (IOException e) {
+            e.printStackTrace();
         }
-        BasicFileAttributes attr = Files.readAttributes(path, BasicFileAttributes.class);
+        return null;
+    }
 
-        return attr.lastModifiedTime().toString();
+    private static void addDateTimeToList(LocalDateTime dateTime, DateTimeFormatter dateTimeFormatter, List<String> list){
+        if (nonNull(dateTime)) {
+            String formattedDateTime = dateTime.format(dateTimeFormatter);
+            if (!list.contains(formattedDateTime)) {
+                list.add(formattedDateTime);
+                System.out.println(formattedDateTime);
+            }
+        }
     }
 
     // Move file
@@ -164,74 +188,35 @@ public class Main {
 
     // Create directory
     private static void createDirectory(Path target) {
-
         File targetDir = target.toFile();
         if (targetDir.mkdir()) {
             System.out.println("TARGET: " + targetDir);
         }
-//        System.out.println("Failed to create directory!");
     }
 
-    // Create directory name
-//    private static Path createDatePath(Path file) throws IOException {
-//        Path file = Paths.get("D:\\Reservekopieën\\Recovery MyPassport\\Afbeeldingen\\Recovered data 03-09 13_13_16\\Deep Scan result\\Existing Partition(NTFS)\\Afbeeldingen\\Back-up\\201507190316_Panasonic\\DCIM\\107_PANA\\P1070128.JPG");
-//
-//        BasicFileAttributes attr = Files.readAttributes(file, BasicFileAttributes.class);
-//
-//        return Paths.get(attr
-//                .creationTime()
-//                .toString()
-//                .substring(0, 10)
-//                .replaceAll("-", ""));
+//    // Loop directory
+//    private static void createDateDirectories(Path source, @NotNull Path target, boolean addPrefix, String suffix) throws IOException {
+//        try (Stream<Path> paths = Files.walk(source)) {
+//            paths
+//                    .filter(Files::isRegularFile)
+//                    .forEach(path -> {
+//                        try {
+//                            String dateTime = fetchDateTime(path);
+//                            Path datePath = createDateTimePath(dateTime, suffix);
+//                            Path targetPath = target.resolve(datePath);
+//                            createDirectory(targetPath);
+//                            Path filePath;
+//                            if (addPrefix) {
+//                                Path prefix = createDateTimePath(dateTime);
+//                                filePath = targetPath.resolve(prefix + "_" + path.getFileName());
+//                            } else {
+//                                filePath = targetPath.resolve(path.getFileName());
+//                            }
+//                            moveFiles(path, filePath);
+//                        } catch (IOException e) {
+//                            e.printStackTrace();
+//                        }
+//                    });
+//        }
 //    }
-
-    // Loop directory
-    private static void createDateDirectories(Path source, @NotNull Path target, String suffix) throws IOException {
-        try (Stream<Path> paths = Files.walk(source)) {
-            paths
-                    .filter(Files::isRegularFile)
-                    .forEach(sourcePath -> {
-                        try {
-                            String dateTime = extractDateTime(sourcePath);
-                            Path datePath = createDateTimePath(dateTime, suffix);
-                            Path prefix = createDateTimePath(dateTime);
-                            Path targetPath = target.resolve(datePath);
-                            createDirectory(targetPath);
-                            Path filePath = targetPath.resolve(prefix + "_" + sourcePath.getFileName());
-//                              System.out.println(datePath);
-//                              System.out.println(prefix);
-//                            System.out.println("TARGET: " + filePath);
-//                            System.out.println("SOURCE: " + sourcePath);
-                            moveFiles(sourcePath, filePath);
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                        }
-                    });
-        }
-    }
 }
-
-// Other file meta data attributes
-//        System.out.println("creationTime: " + attr.creationTime());
-//        System.out.println("lastAccessTime: " + attr.lastAccessTime());
-//        System.out.println("lastModifiedTime: " + attr.lastModifiedTime());
-//
-//        System.out.println("isDirectory: " + attr.isDirectory());
-//        System.out.println("isOther: " + attr.isOther());
-//        System.out.println("isRegularFile: " + attr.isRegularFile());
-//        System.out.println("isSymbolicLink: " + attr.isSymbolicLink());
-//        System.out.println("size: " + attr.size());
-
-//return Paths.get(tag.getDescription()
-//        .substring(0,10)
-//        .concat(suffix)
-//        .replaceAll(":","")
-//        .replaceAll(" ","_"));
-
-//return Paths.get(attr
-//        .lastModifiedTime()
-//        .toString()
-//        .substring(0, 10)
-//        .concat(suffix)
-//        .replaceAll("-", "")
-//        .replaceAll(" ","_"));
