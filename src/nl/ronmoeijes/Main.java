@@ -2,7 +2,6 @@ package nl.ronmoeijes;
 
 import com.drew.imaging.ImageMetadataReader;
 import com.drew.imaging.ImageProcessingException;
-import com.drew.lang.annotations.NotNull;
 import com.drew.metadata.Directory;
 import com.drew.metadata.Metadata;
 import com.drew.metadata.Tag;
@@ -19,10 +18,12 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static java.time.format.DateTimeFormatter.*;
 import static java.util.Objects.nonNull;
+import static org.apache.commons.io.FilenameUtils.getExtension;
 import static org.apache.commons.lang3.StringUtils.EMPTY;
 
 public class Main {
@@ -30,9 +31,11 @@ public class Main {
     private static final Path PICTURE_ROOT = Paths.get("D:\\Afbeeldingen\\Foto's");
     private static final String DATE_TIME_REGEX = "\\d{4}:\\d{2}:\\d{2} \\d{2}:\\d{2}:\\d{2}";
     private static final String SUFFIX_REGEX = "\\d{2,4}\\W\\d{2}\\W\\d{2,4} ";
+    private static final Pattern FILE_NUMBER_PATTERN = Pattern.compile("\\d{3}");
     private static final String UNDERSCORE = "_";
+    private static final String DOT = ".";
     private static final DateTimeFormatter YEAR_PATTERN = DateTimeFormatter.ofPattern("yyyy");
-    private static final DateTimeFormatter DATE_PATTERN = DateTimeFormatter.ofPattern("MMdd");
+    private static final DateTimeFormatter DATE_PATTERN = DateTimeFormatter.ofPattern("yyyyMMdd");
     private static final DateTimeFormatter TIME_PATTERN = DateTimeFormatter.ofPattern("HHmmss");
     private static final DateTimeFormatter META_DATA_PATTERN = DateTimeFormatter.ofPattern("yyyy:MM:dd HH:mm:ss");
     private static final String DASHES = "----------------------------------------"
@@ -46,6 +49,7 @@ public class Main {
     private static boolean addPrefix;
     private static boolean addSuffix;
     private static String suffix = EMPTY;
+    private static int duplicates;
 
     public static void main(String[] args) throws IOException {
         // write your code here
@@ -53,10 +57,7 @@ public class Main {
         parseOptions(args);
 
         System.out.println("SOURCE: " + source);
-        analyseDates(source);
-        target = appendSuffix(years.get(0));
-        System.out.println("TARGET: " + target);
-        createDirectory(target);
+        System.out.println("DUPLICATE TIMES: " + duplicates);
         moveFiles(source, target);
     }
 
@@ -120,19 +121,19 @@ public class Main {
         return options;
     }
 
-    private static boolean analyseDates(Path source) throws IOException {
+    private static boolean isSingleDate(Path source) throws IOException {
         step("analysing dates");
         try (Stream<Path> paths = Files.walk(source)) {
             paths
                     .filter(Files::isRegularFile)
                     .forEach(file -> {
                         LocalDateTime dateTime = fetchDateTime(file);
-                        addDateTimeToList(dateTime, YEAR_PATTERN, years);
-                        addDateTimeToList(dateTime, DATE_PATTERN, dates);
-                        addDateTimeToList(dateTime, TIME_PATTERN, times);
+                        addDateTimeToList(dateTime, YEAR_PATTERN, years, false);
+                        addDateTimeToList(dateTime, DATE_PATTERN, dates, false);
+                        addDateTimeToList(dateTime, TIME_PATTERN, times, true);
                     });
         }
-        return !(dates.size() == 1) && years.size() == 1;
+        return (dates.size() == 1);
     }
 
     private static LocalDateTime fetchDateTime(Path path) {
@@ -182,31 +183,25 @@ public class Main {
         }
     }
 
-    private static void addDateTimeToList(LocalDateTime dateTime, DateTimeFormatter dateTimeFormatter, List<String> list) {
+    private static void addDateTimeToList(LocalDateTime dateTime, DateTimeFormatter dateTimeFormatter, List<String> list, boolean checkDuplicates) {
 //        step("add datetime to list");
         if (nonNull(dateTime)) {
             String formattedDateTime = dateTime.format(dateTimeFormatter);
             if (!list.contains(formattedDateTime)) {
                 list.add(formattedDateTime);
-            }
+            } else if (checkDuplicates) { duplicates++; }
         }
-    }
-
-    private static Path appendSuffix(String date) {
-        if (addSuffix) {
-            return target.resolve(date + suffix);
-        }
-        return target.resolve(date);
     }
 
     private static void createDirectory(Path target) {
         // Create directory
-        step("creating directory");
-        File targetDir = target.toFile();
+//        step("creating directory");
+        File targetDir = target.getParent().toFile();
+        targetDir.mkdirs();
 //        if (targetDir.mkdir()) {
 //            System.out.println("TARGET: " + targetDir);
 //        }
-        System.out.println(targetDir);
+//        System.out.println(targetDir);
     }
 
     private static void moveFiles(Path source, Path target) throws IOException {
@@ -216,21 +211,77 @@ public class Main {
                     .filter(Files::isRegularFile)
                     .forEach(file -> {
                         LocalDateTime dateTime = fetchDateTime(file);
-                        moveFile(file, target, dateTime);
+                        preparePaths(file, target, dateTime);
                     });
         }
     }
 
     // Move file
-    private static void moveFile(Path file, Path target, LocalDateTime dateTime) {
+    private static void preparePaths(Path file, Path target, LocalDateTime dateTime) {
+        assert target!=null;
         String fileName = file.getFileName().toString();
+        String fileNumber = fileName.substring(fileName.length()-7, fileName.length()-4);
+        boolean validFileNumber = FILE_NUMBER_PATTERN.matcher(fileNumber).matches();
+        String timePrefix = EMPTY;
+
         if (file.equals(target)) {
             System.out.println("INFO: " + fileName + " was already in " + file.getParent());
         } else if (nonNull(dateTime)) {
-            System.out.println("MOVED: " + file + " to " + target.resolve(dateTime.format(DATE_PATTERN)).resolve(dateTime.format(TIME_PATTERN) + UNDERSCORE + fileName));
+            if (addPrefix) { timePrefix = dateTime.format(TIME_PATTERN); }
+            if (addSuffix) {
+                suffix = dateTime.format(DATE_PATTERN) + suffix;
+            }
+            else {
+                suffix = dateTime.format(DATE_PATTERN);
+            }
+
+            if (validFileNumber) {
+                moveFile(file, target, suffix, timePrefix + UNDERSCORE + fileNumber + DOT + getExtension(fileName));
+            } else {
+                moveFile(file, target, suffix,"err" + UNDERSCORE + timePrefix + UNDERSCORE + fileName);
+            }
         } else {
-            System.out.println("MOVED: " + fileName + " moved from " + file.getParent() + " to " + target.resolve("Other files"));
+            moveFile(file, target, "Other files", fileName);
         }
+    }
+
+    private static void moveFile(Path file, Path target, String ... resolution) {
+        for (String str : resolution) {
+            target = target.resolve(str);
+        }
+        createDirectory(target);
+        try {
+            for (int i = 0; target.toFile().exists(); i++) {
+                target.resolve(UNDERSCORE + i);
+            }
+            Files.move(file, target);
+            moveMessage(file, target);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Simulate movement of file by printing paths
+    private static void fakeMoveFile(Path file, Path target, LocalDateTime dateTime) {
+        assert target!=null;
+        String fileName = file.getFileName().toString();
+        String fileNumber = fileName.substring(fileName.length()-7, fileName.length()-4);
+        boolean validFileNumber = FILE_NUMBER_PATTERN.matcher(fileNumber).matches();
+        if (file.equals(target)) {
+            System.out.println("INFO: " + fileName + " was already in " + file.getParent());
+        } else if (nonNull(dateTime)) {
+            if (validFileNumber) {
+                moveMessage(file, target.resolve(dateTime.format(DATE_PATTERN)).resolve(dateTime.format(TIME_PATTERN) + UNDERSCORE + fileNumber + DOT + getExtension(fileName)));
+            } else {
+                moveMessage(file, target.resolve(dateTime.format(DATE_PATTERN)).resolve("err" + UNDERSCORE + dateTime.format(TIME_PATTERN) + UNDERSCORE + fileName));
+            }
+        } else {
+            moveMessage(file, target.resolve("Other files").resolve(fileName));
+        }
+    }
+
+    private static void moveMessage(Path file, Path target) {
+        System.out.println("MOVED: " + file + " to " + target);
     }
 
     private static void step(String output) {
