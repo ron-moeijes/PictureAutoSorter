@@ -5,6 +5,7 @@ import com.drew.imaging.ImageProcessingException;
 import com.drew.metadata.Directory;
 import com.drew.metadata.Metadata;
 import com.drew.metadata.Tag;
+import org.apache.commons.io.FileUtils;
 
 import java.io.File;
 import java.io.IOException;
@@ -18,26 +19,28 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
-import static java.time.format.DateTimeFormatter.*;
+import static java.time.format.DateTimeFormatter.ISO_DATE_TIME;
 import static java.util.Objects.nonNull;
-import static org.apache.commons.io.FilenameUtils.getExtension;
-import static org.apache.commons.lang3.StringUtils.EMPTY;
 import static nl.ronmoeijes.Constants.*;
+import static org.apache.commons.io.FilenameUtils.getExtension;
+import static org.apache.commons.io.FilenameUtils.removeExtension;
+import static org.apache.commons.lang3.StringUtils.EMPTY;
 
 public class Main {
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) {
         // write your code here
         Options options = new Options();
         options.parse(args);
-        System.out.println("SOURCE: " + options.getSource());
-        options.setSingleDate(hasSingleMatch(options.getSource(), DATE_PATTERN));
-        options.setSingleYear(hasSingleMatch(options.getSource(), YEAR_PATTERN));
-        moveFiles(options);
+        Path source = options.getSource();
+        new Message("source", source).print();
+        step("analysing dates");
+        options.setSingleDate(hasSingleMatch(source, DATE_PATTERN));
+        options.setSingleYear(hasSingleMatch(source, YEAR_PATTERN));
+        moveFiles(source, options);
     }
 
     private static boolean hasSingleMatch(Path source, DateTimeFormatter dateTimeFormatter) {
-//        step("analysing dates");
         List<String> list = new ArrayList<>();
         try (Stream<Path> paths = Files.walk(source)) {
             paths
@@ -58,15 +61,18 @@ public class Main {
         return false;
     }
 
-    private static void moveFiles(Options options) throws IOException {
+    private static void moveFiles(Path source, Options options) {
         step("moving files");
-        try (Stream<Path> paths = Files.walk(options.getSource())) {
+        try (Stream<Path> paths = Files.walk(source)) {
             paths
                     .filter(Files::isRegularFile)
                     .forEach(file -> {
                         LocalDateTime dateTime = fetchDateTime(file);
                         preparePaths(file, dateTime, options);
                     });
+            cleanUpFolders(source);
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
@@ -108,7 +114,7 @@ public class Main {
                     .toString();
             System.out.println(lastModifiedTime);
             return ZonedDateTime.parse(lastModifiedTime, ISO_DATE_TIME).toLocalDateTime();
-        } catch (ImageProcessingException e) {
+        } catch (ImageProcessingException | ArrayIndexOutOfBoundsException e) {
             System.err.println("ERROR: " + e + " for " + file.getName());
             return null;
         } catch (IOException e) {
@@ -118,51 +124,94 @@ public class Main {
     }
 
     // Move file
-    private static void preparePaths(Path file, LocalDateTime dateTime, Options options) {
+    private static void preparePaths(Path path, LocalDateTime dateTime, Options options) {
         Path target = options.getTarget();
-        String customSuffix = options.getCustomSuffix();
-
         assert target != null;
 
-        String fileName = file.getFileName().toString();
-        String fileNumber = fileName.substring(fileName.length() - 7, fileName.length() - 4);
-        boolean validFileNumber = FILE_NUMBER_PATTERN.matcher(fileNumber).matches();
+        boolean addSuffix = options.addSuffix();
+        boolean validFileNumber;
+        String fileNumber = EMPTY;
+        String fileName = path.getFileName().toString();
+
+        if (fileName.length()>3) {
+            fileNumber = fileName.substring(fileName.length() - 7, fileName.length() - 4);
+            validFileNumber = FILE_NUMBER_PATTERN.matcher(fileNumber).matches();
+        } else { validFileNumber = false; }
 
         StringBuilder filePrefix = new StringBuilder();
-        StringBuilder folderName = new StringBuilder();
-        StringBuilder subFolderName = new StringBuilder();
+        StringBuilder millenniumFolder = new StringBuilder();
+        StringBuilder yearFolder = new StringBuilder();
+        StringBuilder dateFolder = new StringBuilder();
 
-        if (file.equals(target)) {
-            System.out.println("INFO: " + fileName + " was already in " + file.getParent());
+        if (path.equals(target)) {
+            new Message("info", fileName, "was already in", path.getParent()).print();
         } else if (nonNull(dateTime)) {
             if (options.addPrefix()) {
                 filePrefix.append(dateTime.format(TIME_PATTERN)).append(UNDERSCORE);
             }
             if (options.isSingleDate()) {
-                folderName.append(dateTime.format(DATE_PATTERN));
-            } else {
-                folderName.append(dateTime.format(YEAR_PATTERN));
-                subFolderName.append(dateTime.format(DATE_PATTERN));
-            }
-            if (options.addSuffix()) {
-                folderName.append(UNDERSCORE);
-                if (!customSuffix.equals(EMPTY)) {
-                    folderName.append(customSuffix);
-                } else {
-                    folderName.append(options.getSource()
-                            .getFileName()
-                            .toString()
-                            .replaceAll(FOLDER_DATE_PATTERN, ""));
+                dateFolder.append(dateTime.format(DATE_PATTERN));
+                if (addSuffix) {
+                    appendSuffix(dateFolder, options);
+                }
+            } else if (!options.addMillenniumFolder() || options.isSingleYear()) {
+                yearFolder.append(dateTime.format(YEAR_PATTERN));
+                dateFolder.append(dateTime.format(DATE_PATTERN));
+                if (addSuffix) {
+                    appendSuffix(yearFolder, options);
                 }
             }
-
-            if (validFileNumber) {
-                moveFile(file, target, folderName.toString(), subFolderName.toString(), filePrefix + fileNumber + DOT + getExtension(fileName));
-            } else {
-                moveFile(file, target, folderName.toString(), subFolderName.toString(), "err_" + filePrefix + fileName);
+            else {
+                millenniumFolder.append(dateTime.format(YEAR_PATTERN).substring(0,2));
+                if (addSuffix) {
+                    appendSuffix(millenniumFolder, options);
+                }
+                yearFolder.append(dateTime.format(YEAR_PATTERN));
+                dateFolder.append(dateTime.format(DATE_PATTERN));
+            }
+            try {
+                if (validFileNumber) {
+                    moveFile(path, target, millenniumFolder.toString(), yearFolder.toString(), dateFolder.toString(), filePrefix + fileNumber + DOT + getExtension(fileName));
+                } else {
+                    moveFile(path, target, millenniumFolder.toString(), yearFolder.toString(), dateFolder.toString(), "errors", filePrefix + fileName);
+                }
+            } catch (Exception e) {
+                System.err.println("Unexpected error occured: " + e);
             }
         } else {
-            moveFile(file, target, "Other files", fileName);
+            try {
+                moveFile(path, target, "Other files", fileName);
+            } catch (Exception e) {
+                System.err.println("Unexpected error occured: " + e);
+            }
+        }
+    }
+
+    private static void appendSuffix(StringBuilder builder, Options options) {
+        String customSuffix = options.getCustomSuffix();
+
+        builder.append(UNDERSCORE);
+            if (customSuffix != null) {
+                builder.append(customSuffix);
+            } else {
+                builder.append(options.getSource()
+                        .getFileName()
+                        .toString()
+                        .replaceAll(FOLDER_DATE_PATTERN, ""));
+            }
+        }
+
+    private static void cleanUpFolders(Path source) {
+        File file = source.toFile();
+        try {
+//            if (file.isDirectory() && file.list() != null && file.list().length > 0) {
+//                new Message("warn", source, "still contains files!", "Manual deletion required!").print();
+//            } else {
+                FileUtils.deleteDirectory(file);
+                new Message("deleted", source).print();
+//            }
+        } catch (NullPointerException | IOException e) {
+            e.printStackTrace();
         }
     }
 
@@ -170,30 +219,27 @@ public class Main {
         for (String str : resolution) {
             target = target.resolve(str);
         }
-        createTargetDirectory(target);
+        Path targetDir = createTargetDirectory(target);
         try {
-            for (int i = 0; target.toFile().exists(); i++) {
-                target.resolve(UNDERSCORE + i);
+            String targetName = target.getFileName().toString();
+            for (int i = 1; target.toFile().exists(); i++) {
+                target = targetDir.resolve(removeExtension(targetName) + UNDERSCORE + i + DOT + getExtension(targetName));
             }
             Files.move(file, target);
-            moveMessage(file, target);
+            new Message("moved", file, "to", target).print();
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    private static void createTargetDirectory(Path target) {
+    private static Path createTargetDirectory(Path target) {
         // Create directory
 //        step("creating directory");
         File targetDir = target.getParent().toFile();
         if (targetDir.mkdirs()) {
-            System.out.println(targetDir.getName() + " created in " + targetDir.getParent());
-        }
+            new Message("created", targetDir.getName(), "in", targetDir.getParent()).print();
+        } return targetDir.toPath();
 //        System.out.println(targetDir);
-    }
-
-    private static void moveMessage(Path file, Path target) {
-        System.out.println("MOVED: " + file + " to " + target);
     }
 
     private static void step(String output) {

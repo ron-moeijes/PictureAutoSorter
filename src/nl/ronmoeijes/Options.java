@@ -17,6 +17,7 @@ class Options {
     private boolean generateSuffix;
     private boolean isSingleDate;
     private boolean isSingleYear;
+    private boolean millenniumFolder;
 
     void parse(String[] args) {
         // create the command line parser
@@ -27,7 +28,6 @@ class Options {
             // parse the command line arguments
             CommandLine line = parser.parse(create(), args);
 
-            if (!line.hasOption("source")) { throw new ParseException("Source option is required!"); }
             source = Paths.get(line.getOptionValue("source"));
             // validate that TARGET_DIR has been set
             if (line.hasOption("target")) {
@@ -42,6 +42,9 @@ class Options {
                 addSuffix = true;
                 customSuffix = line.getOptionValue("suffix");
             }
+            if (line.hasOption("millennium")) {
+                millenniumFolder = true;
+            }
         } catch (ParseException exp) {
             System.out.println("Unexpected exception:" + exp.getMessage());
         }
@@ -55,6 +58,7 @@ class Options {
                 .longOpt("source")
                 .desc("specify a source path")
                 .hasArg()
+                .required()
                 .argName("SOURCE")
                 .build();
         options.addOption(sourceOption);
@@ -69,10 +73,12 @@ class Options {
         Option suffixOption = Option.builder("x")
                 .longOpt("suffix")
                 .desc("specify a suffix for the new directory [Default = " + PICTURE_ROOT + "]")
-                .hasArg()
+                .optionalArg(true)
                 .argName("SUFFIX")
                 .build();
         options.addOption(suffixOption);
+        options.addOption("m", "millennium", false,
+                "store all year folders in a millennium folder");
 
         return options;
     }
@@ -119,5 +125,9 @@ class Options {
 
     void setSingleYear(boolean singleYear) {
         isSingleYear = singleYear;
+    }
+
+    public boolean addMillenniumFolder() {
+        return millenniumFolder;
     }
 }
